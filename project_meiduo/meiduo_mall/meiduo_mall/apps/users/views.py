@@ -4,12 +4,42 @@ from django import http
 from django.db import DatabaseError
 import re
 from django_redis import get_redis_connection
+from django.contrib.auth import login,authenticate,logout
+from django.urls import reverse
+from django.contrib.auth.mixins import LoginRequiredMixin
 
 from .models import User
-from django.urls import reverse
-from django.contrib.auth import login
 from meiduo_mall.utils.response_code import RETCODE
 # Create your views here.
+
+class UserInfoView(LoginRequiredMixin,View):
+    """用户中心"""
+    def get(self, request):
+        """提供个人信息界面"""
+        # if request.user.is_authenticated:
+        #     return render(request,'user_center_info')
+        # return redirect(reverse('users:login'))
+
+        # login_url = 'login/'
+        # redirect_field_name = 'redirect_to'
+
+        #对应逻辑在LoginView
+
+        return render(request, 'user_center_info.html')
+
+
+class LogoutView(View):
+    """用户退出登录"""
+    def get(self,request):
+        #清除状态保持信息
+        logout(request)
+        #退出登录后重定向到首页
+        response = redirect(reverse('contents:index'))
+        #删除cookie的用户名
+        response.delete_cookie('username')  #对应LoginView的设置
+        #响应结果
+        return response
+
 
 class MobileCountView(View):
     def get(self,request,mobile):
@@ -20,6 +50,63 @@ class UsernameCountView(View):
     def get(self,request,username): #username从url获取接收
         count = User.objects.filter(username=username).count()
         return http.JsonResponse({'code':RETCODE.OK,'errmsg':'ok','count':count})
+
+class LoginView(View):
+    """登录"""
+    def get(self,request):
+        return render(request,'login.html')
+
+    def post(self,request):
+        username = request.POST.get('username')
+        password = request.POST.get('password')
+        remembered = request.POST.get('remembered')
+
+        # 校验参数
+        # 判断参数是否齐全
+
+        if not all([username,password]):
+            return http.HttpResponseForbidden('缺少参数')
+
+        # 判断用户名是否是5-20个字符
+        if not re.match(r'[a-zA-Z0-9_-]{5,20}$',username):
+            return http.HttpResponseForbidden('请输入正确的用户名或手机号')
+
+        # 判断密码是否是8-20个数字
+        if not re.match(r'^[0-9A-Za-z]{8,20}$', password):
+            return http.HttpResponseForbidden('密码最少8位，最长20位')
+
+        #认证用户，使用账号查询用户是否存在，如果存在，再校验密码是否正常
+        user = authenticate(username=username,password=password)
+
+        if user is None:
+            return render(request,'login.html',{'account_errmsg':'用户名或密码错误'})
+
+        # 实现状态保持
+        login(request, user)
+        # 设置状态保持的周期
+        if remembered != 'on':
+            # 没有记住用户：浏览器会话结束就过期
+            request.session.set_expiry(0)
+        else:
+            # 记住用户：None表示两周后过期：默认是两周
+            request.session.set_expiry(None)
+
+        # 相应结果：重定向到首页
+        next = request.GET.get('next')
+        if next:
+            #重定向到next
+            response = redirect(next)
+        else:
+            #重定向到首页
+            response = redirect(reverse('contents:index'))
+
+        #为了实现首页的右上角展示用户名信息，我们需要将用户的缓存在cookie
+        response.set_cookie('username', user.username, max_age=3600 * 24 * 15)
+
+        # 响应登录结果
+        # return redirect(reverse('contents:index'))
+        return response
+
 
 class RegisterView(View):
     def get(self,request):
@@ -73,4 +160,10 @@ class RegisterView(View):
         #实现状态保持
         login(request,user)
 
-        return redirect(reverse('contents:index'))
+        #相应结果：重定向到首页
+        response = redirect(reverse('contents:index'))
+
+        # 为了实现首页的右上角展示用户名信息，我们需要将用户的缓存在cookie
+        response.set_cookie('username',user.username,max_age=3600*24*15)
+
+        return response
